@@ -1577,31 +1577,37 @@
                 window.AudioContext || window.webkitAudioContext
             )();
 
+            function resumeCtx() {
+                if (ctx.state === 'suspended') return ctx.resume();
+                return Promise.resolve();
+            }
+
             function playDing() {
-                // Soft, pleasant bell — end of focus session
-                const times = [0, 0.15, 0.3];
-                times.forEach((t, i) => {
-                    const osc = ctx.createOscillator();
-                    const gain = ctx.createGain();
-                    osc.connect(gain);
-                    gain.connect(ctx.destination);
-                    osc.type = 'sine';
-                    osc.frequency.setValueAtTime(880, ctx.currentTime + t);
-                    osc.frequency.exponentialRampToValueAtTime(
-                        660,
-                        ctx.currentTime + t + 0.4,
-                    );
-                    gain.gain.setValueAtTime(0, ctx.currentTime + t);
-                    gain.gain.linearRampToValueAtTime(
-                        0.28 - i * 0.06,
-                        ctx.currentTime + t + 0.05,
-                    );
-                    gain.gain.exponentialRampToValueAtTime(
-                        0.001,
-                        ctx.currentTime + t + 0.9,
-                    );
-                    osc.start(ctx.currentTime + t);
-                    osc.stop(ctx.currentTime + t + 0.9);
+                resumeCtx().then(() => {
+                    const times = [0, 0.15, 0.3];
+                    times.forEach((t, i) => {
+                        const osc = ctx.createOscillator();
+                        const gain = ctx.createGain();
+                        osc.connect(gain);
+                        gain.connect(ctx.destination);
+                        osc.type = 'sine';
+                        osc.frequency.setValueAtTime(880, ctx.currentTime + t);
+                        osc.frequency.exponentialRampToValueAtTime(
+                            660,
+                            ctx.currentTime + t + 0.4,
+                        );
+                        gain.gain.setValueAtTime(0, ctx.currentTime + t);
+                        gain.gain.linearRampToValueAtTime(
+                            0.28 - i * 0.06,
+                            ctx.currentTime + t + 0.05,
+                        );
+                        gain.gain.exponentialRampToValueAtTime(
+                            0.001,
+                            ctx.currentTime + t + 0.9,
+                        );
+                        osc.start(ctx.currentTime + t);
+                        osc.stop(ctx.currentTime + t + 0.9);
+                    });
                 });
             }
 
@@ -1610,7 +1616,7 @@
             function playAlarm() {
                 stopAlarm();
                 const totalDuration = 3;
-                const cycleLen = 0.55 * 3; // one burst = 3 chirps × 0.55s = 1.65s
+                const cycleLen = 0.55 * 3;
                 let elapsed = 0;
 
                 function burst() {
@@ -1618,22 +1624,27 @@
                         stopAlarm();
                         return;
                     }
-                    const now = ctx.currentTime;
-                    for (let i = 0; i < 3; i++) {
-                        const osc = ctx.createOscillator();
-                        const gain = ctx.createGain();
-                        osc.connect(gain);
-                        gain.connect(ctx.destination);
-                        osc.type = 'sawtooth';
-                        const t = now + i * 0.55;
-                        osc.frequency.setValueAtTime(400, t);
-                        osc.frequency.linearRampToValueAtTime(900, t + 0.45);
-                        gain.gain.setValueAtTime(0.22, t);
-                        gain.gain.setValueAtTime(0.22, t + 0.38);
-                        gain.gain.linearRampToValueAtTime(0, t + 0.5);
-                        osc.start(t);
-                        osc.stop(t + 0.5);
-                    }
+                    resumeCtx().then(() => {
+                        const now = ctx.currentTime;
+                        for (let i = 0; i < 3; i++) {
+                            const osc = ctx.createOscillator();
+                            const gain = ctx.createGain();
+                            osc.connect(gain);
+                            gain.connect(ctx.destination);
+                            osc.type = 'sawtooth';
+                            const t = now + i * 0.55;
+                            osc.frequency.setValueAtTime(400, t);
+                            osc.frequency.linearRampToValueAtTime(
+                                900,
+                                t + 0.45,
+                            );
+                            gain.gain.setValueAtTime(0.22, t);
+                            gain.gain.setValueAtTime(0.22, t + 0.38);
+                            gain.gain.linearRampToValueAtTime(0, t + 0.5);
+                            osc.start(t);
+                            osc.stop(t + 0.5);
+                        }
+                    });
                     elapsed += cycleLen + 0.3;
                 }
 
@@ -1649,14 +1660,9 @@
                 }
             }
 
-            // Resume AudioContext on first interaction (browser policy)
-            document.addEventListener(
-                'click',
-                () => {
-                    if (ctx.state === 'suspended') ctx.resume();
-                },
-                {once: true},
-            );
+            // Resume AudioContext on any interaction (not just the first)
+            document.addEventListener('click', () => resumeCtx());
+            document.addEventListener('keydown', () => resumeCtx());
 
             // ── TIMER ──
             const cfg = {focus: 50, break: 10, cycle: 8};
@@ -1712,6 +1718,38 @@
                 );
             }
 
+            // ── SERVICE WORKER + NOTIFICATIONS ──
+            let swReg = null;
+
+            async function initSW() {
+                if (!('serviceWorker' in navigator)) return;
+                try {
+                    swReg = await navigator.serviceWorker.register('/sw.js');
+                    // Listen for TIMER_ENDED messages from the SW (fired when tab was hidden)
+                    navigator.serviceWorker.addEventListener('message', (e) => {
+                        if (e.data?.type === 'TIMER_ENDED') {
+                            // Tab was hidden when timer ended — SW already showed notification
+                            // Now play sound + update UI since tab may now be visible
+                            if (!running) onEnd();
+                        }
+                    });
+                } catch (err) {
+                    console.warn('SW registration failed:', err);
+                }
+            }
+
+            async function requestNotifPermission() {
+                if (!('Notification' in window)) return;
+                if (Notification.permission === 'default') {
+                    await Notification.requestPermission();
+                }
+            }
+
+            function swSend(msg) {
+                if (!swReg?.active) return;
+                swReg.active.postMessage(msg);
+            }
+
             function toggleTimer() {
                 stopAlarm();
                 pulseClock();
@@ -1719,25 +1757,43 @@
                     clearInterval(timerInt);
                     running = false;
                     setClockState('idle');
+                    swSend({type: 'CANCEL_TIMER'});
                 } else {
                     if (ctx.state === 'suspended') ctx.resume();
                     running = true;
                     setClockState('running');
-                    timerInt = setInterval(() => {
-                        remaining--;
-                        if (remaining <= 0) {
-                            remaining = 0;
-                            clearInterval(timerInt);
-                            running = false;
-                            setClockState('idle');
-                            renderClock();
-                            onEnd();
-                            return;
-                        }
-                        renderClock();
-                    }, 1000);
+                    timerEndAt = Date.now() + remaining * 1000;
+                    // Tell SW when to fire notification (in case tab goes inactive)
+                    swSend({
+                        type: 'START_TIMER',
+                        payload: {remainingMs: remaining * 1000, mode},
+                    });
+                    timerInt = setInterval(timerTick, 500);
                 }
             }
+
+            let timerEndAt = 0;
+
+            function timerTick() {
+                if (!running) return;
+                remaining = Math.round((timerEndAt - Date.now()) / 1000);
+                if (remaining <= 0) {
+                    remaining = 0;
+                    clearInterval(timerInt);
+                    running = false;
+                    swSend({type: 'CANCEL_TIMER'});
+                    setClockState('idle');
+                    renderClock();
+                    onEnd();
+                    return;
+                }
+                renderClock();
+            }
+
+            // Sync ring instantly when tab becomes visible again
+            document.addEventListener('visibilitychange', () => {
+                if (!document.hidden && running) timerTick();
+            });
 
             function updateHint() {}
 
@@ -1800,6 +1856,7 @@
             function resetTimer() {
                 clearInterval(timerInt);
                 running = false;
+                timerEndAt = 0;
                 remaining = cfg[mode] * 60;
                 totalSec = remaining;
                 pulseClock();
@@ -2043,6 +2100,8 @@
                 renderNN();
                 updateAdjLabel();
                 setClockState('idle');
+                await initSW();
+                await requestNotifPermission();
 
                 // Load session (pomCount + theme)
                 const session = await api('GET', `/session/${deviceId}`);

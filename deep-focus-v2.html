@@ -1667,7 +1667,7 @@
 
             // ── TIMER ──
             const cfg = {focus: 50, break: 10, cycle: 8};
-            const TEST_MODE = true; // ← change to false for production
+            const TEST_MODE = false;
             const MULT = TEST_MODE ? 1 : 60;
             const CIRC = 276.46;
             let mode = 'focus',
@@ -1749,11 +1749,6 @@
                     running = false;
                     setClockState('idle');
                     renderClock();
-                    console.log(
-                        '[DeepFocus] Timer ended, mode=' +
-                            mode +
-                            ', calling onEnd()',
-                    );
                     onEnd();
                     return;
                 }
@@ -1773,12 +1768,10 @@
                     if (tapTimer) {
                         clearTimeout(tapTimer);
                         tapTimer = null;
-                        console.log('[DeepFocus] Double tap → reset');
                         resetTimer();
                     } else {
                         tapTimer = setTimeout(() => {
                             tapTimer = null;
-                            console.log('[DeepFocus] Single tap → toggle');
                             toggleTimer();
                         }, 220);
                     }
@@ -1795,37 +1788,23 @@
                 );
             }
 
-            function startBreak() {
-                console.log('[DeepFocus] startBreak called');
-                mode = 'break';
-                totalSec = cfg.break * MULT;
-                remaining = totalSec;
-                updateAdjLabel();
-                renderClock();
-                running = true;
-                setClockState('running');
-                timerEndAt = Date.now() + remaining * 1000;
-                timerInt = setInterval(timerTick, 500);
-            }
-
             function onEnd() {
-                console.log(
-                    '[DeepFocus] onEnd called, mode=' +
-                        mode +
-                        ', ctx.state=' +
-                        ctx.state,
-                );
                 if (mode === 'focus') {
                     playDing();
-                    console.log('[DeepFocus] playDing called');
                     pomCount++;
                     renderDots();
                     api('PATCH', `/session/${deviceId}`, {pomCount});
-                    showToast('Session complete — break started.');
-                    setTimeout(() => startBreak(), 900);
+                    showToast('Session complete — tap to start your break.');
+                    setTimeout(() => {
+                        mode = 'break';
+                        totalSec = cfg.break * MULT;
+                        remaining = totalSec;
+                        updateAdjLabel();
+                        setClockState('idle');
+                        renderClock();
+                    }, 900);
                 } else {
                     playAlarm();
-                    console.log('[DeepFocus] playAlarm called');
                     showToast('Break over — tap to start your next session.');
                     setTimeout(() => {
                         mode = 'focus';
@@ -1917,6 +1896,7 @@
                 clearInterval(timerInt);
                 running = false;
                 stopAlarm();
+                timerEndAt = 0;
                 pomCount = 0;
                 todos = [];
                 nnItems = nnItems.map((i) => ({...i, done: false}));

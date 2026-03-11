@@ -1220,14 +1220,6 @@
                             <div class="toggle-thumb"></div>
                         </div>
                     </div>
-                    <button
-                        class="reset-all-btn"
-                        onclick="logout()"
-                        title="Sign out"
-                        style="font-size: 13px"
-                    >
-                        ↩
-                    </button>
                 </div>
                 <div class="topbar-right">
                     <div class="topbar-date" id="topDate"></div>
@@ -1531,12 +1523,36 @@
         </section>
 
         <script>
-            // ── AUTH GUARD — redirect to login if no token ──
-            if (!localStorage.getItem('df_token')) {
-                window.location.href = 'login.html';
-            }
+            // ── API LAYER ──
+            const API_BASE = 'https://deep-focus.up.railway.app/api';
 
-            // ── DATE ──
+            function getDeviceId() {
+                let id = localStorage.getItem('df_deviceId');
+                if (!id) {
+                    id =
+                        'df_' +
+                        Math.random().toString(36).slice(2) +
+                        Date.now().toString(36);
+                    localStorage.setItem('df_deviceId', id);
+                }
+                return id;
+            }
+            const deviceId = getDeviceId();
+
+            async function api(method, path, body) {
+                try {
+                    const res = await fetch(API_BASE + path, {
+                        method,
+                        headers: {'Content-Type': 'application/json'},
+                        body: body ? JSON.stringify(body) : undefined,
+                    });
+                    if (!res.ok) throw new Error(`${res.status}`);
+                    return await res.json();
+                } catch (err) {
+                    console.warn('API error:', err.message);
+                    return null;
+                }
+            }
             const d = new Date();
             const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
             const months = [
@@ -1838,7 +1854,9 @@
                 document.getElementById('themeLabel').textContent = isGreen
                     ? 'green'
                     : 'e-ink';
-                api('PATCH', '/session', {theme: isGreen ? 'green' : 'eink'});
+                api('PATCH', `/session/${deviceId}`, {
+                    theme: isGreen ? 'green' : 'eink',
+                });
                 renderClock();
             }
 
@@ -1848,46 +1866,6 @@
                     (_, i) =>
                         `<div class="pom-dot ${i < pomCount % cfg.cycle ? 'lit' : ''}"></div>`,
                 ).join('');
-            }
-
-            // ── API LAYER ──
-            const API_BASE = 'https://deep-focus.up.railway.app/api';
-
-            function getToken() {
-                return localStorage.getItem('df_token');
-            }
-
-            function logout() {
-                localStorage.removeItem('df_token');
-                localStorage.removeItem('df_user');
-                window.location.href = 'login.html';
-            }
-
-            async function api(method, path, body) {
-                const token = getToken();
-                if (!token) {
-                    logout();
-                    return null;
-                }
-                try {
-                    const res = await fetch(API_BASE + path, {
-                        method,
-                        headers: {
-                            'Content-Type': 'application/json',
-                            Authorization: `Bearer ${token}`,
-                        },
-                        body: body ? JSON.stringify(body) : undefined,
-                    });
-                    if (res.status === 401) {
-                        logout();
-                        return null;
-                    }
-                    if (!res.ok) throw new Error(`${res.status}`);
-                    return await res.json();
-                } catch (err) {
-                    console.warn('API error:', err.message);
-                    return null;
-                }
             }
 
             // ── HARD RESET ──
@@ -1910,7 +1888,7 @@
                 renderDots();
                 renderTodos();
                 renderNN();
-                await api('PATCH', '/session', {pomCount: 0});
+                await api('PATCH', `/session/${deviceId}`, {pomCount: 0});
                 showToast('Everything reset.');
             }
 
@@ -1922,7 +1900,9 @@
                 const txt = inp.value.trim();
                 if (!txt) return;
                 inp.value = '';
-                const created = await api('POST', '/todos', {text: txt});
+                const created = await api('POST', `/todos/${deviceId}`, {
+                    text: txt,
+                });
                 if (created) todos.unshift(created);
                 renderTodos();
             }
@@ -1976,7 +1956,7 @@
             const _origOnEnd = onEnd;
             function onEnd() {
                 _origOnEnd();
-                api('PATCH', '/session', {pomCount});
+                api('PATCH', `/session/${deviceId}`, {pomCount});
             }
 
             // ── NON-NEGOTIABLES ──
@@ -1988,7 +1968,9 @@
                 const txt = inp.value.trim();
                 if (!txt) return;
                 inp.value = '';
-                const created = await api('POST', '/nn', {text: txt});
+                const created = await api('POST', `/nn/${deviceId}`, {
+                    text: txt,
+                });
                 if (created) nnItems.push(created);
                 renderNN();
             }
@@ -2063,7 +2045,7 @@
                 setClockState('idle');
 
                 // Load session (pomCount + theme)
-                const session = await api('GET', '/session');
+                const session = await api('GET', `/session/${deviceId}`);
                 if (session) {
                     pomCount = session.pomCount || 0;
                     if (session.theme === 'green') {
@@ -2076,14 +2058,14 @@
                 }
 
                 // Load todos
-                const fetchedTodos = await api('GET', '/todos');
+                const fetchedTodos = await api('GET', `/todos/${deviceId}`);
                 if (fetchedTodos) {
                     todos = fetchedTodos;
                     renderTodos();
                 }
 
                 // Load non-negotiables (server handles daily reset automatically)
-                const nnData = await api('GET', '/nn');
+                const nnData = await api('GET', `/nn/${deviceId}`);
                 if (nnData) {
                     nnItems = nnData.items;
                     // Count today's streak from items that are done today

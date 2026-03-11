@@ -1,6 +1,4 @@
 // sw.js — DeepFocus Service Worker
-// Handles background timer and fires notifications when tab is inactive
-
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
 
@@ -10,48 +8,38 @@ self.addEventListener('message', (event) => {
     const {type, payload} = event.data;
 
     if (type === 'START_TIMER') {
-        // Cancel any existing timer
         if (timerTimeout) clearTimeout(timerTimeout);
-
         const {remainingMs, mode} = payload;
 
-        timerTimeout = setTimeout(() => {
+        timerTimeout = setTimeout(async () => {
             timerTimeout = null;
+            const clients = await self.clients.matchAll({
+                type: 'window',
+                includeUncontrolled: true,
+            });
+            const anyVisible = clients.some(
+                (c) => c.visibilityState === 'visible',
+            );
 
-            // Check if any client (tab) is currently visible
-            self.clients
-                .matchAll({type: 'window', includeUncontrolled: true})
-                .then((clients) => {
-                    const anyVisible = clients.some(
-                        (c) => c.visibilityState === 'visible',
-                    );
-
-                    if (!anyVisible) {
-                        // Tab is hidden — fire a system notification
-                        const title =
-                            mode === 'focus'
-                                ? '✅ Focus session complete!'
-                                : '⏰ Break is over!';
-                        const body =
-                            mode === 'focus'
-                                ? 'Great work. Time for a break.'
-                                : 'Ready to focus again? Tap to start your next session.';
-
-                        self.registration.showNotification(title, {
-                            body,
-                            icon: '/icon-192.png',
-                            badge: '/icon-192.png',
-                            tag: 'deepfocus-timer',
-                            renotify: true,
-                            requireInteraction: false,
-                        });
-                    }
-
-                    // Also message the tab so it can play sound + update UI
-                    clients.forEach((c) =>
-                        c.postMessage({type: 'TIMER_ENDED', mode}),
-                    );
+            if (!anyVisible) {
+                const title =
+                    mode === 'focus'
+                        ? '✅ Focus session complete!'
+                        : '⏰ Break is over!';
+                const body =
+                    mode === 'focus'
+                        ? 'Time for a 10 min break.'
+                        : 'Ready to focus again?';
+                await self.registration.showNotification(title, {
+                    body,
+                    tag: 'deepfocus-timer',
+                    renotify: true,
+                    requireInteraction: false,
                 });
+            }
+
+            // Tell the tab the timer ended (so it can update UI + play sound)
+            clients.forEach((c) => c.postMessage({type: 'TIMER_ENDED', mode}));
         }, remainingMs);
     }
 
@@ -63,7 +51,6 @@ self.addEventListener('message', (event) => {
     }
 });
 
-// Clicking the notification focuses the app tab
 self.addEventListener('notificationclick', (event) => {
     event.notification.close();
     event.waitUntil(

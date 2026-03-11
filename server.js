@@ -18,6 +18,13 @@ app.use('/api/todos', todosRouter);
 app.use('/api/nn', nnRouter);
 app.use('/api/session', sessionRouter);
 
+// Serve sw.js from root with correct headers (required for service workers)
+app.get('/sw.js', (req, res) => {
+    res.setHeader('Content-Type', 'application/javascript');
+    res.setHeader('Service-Worker-Allowed', '/');
+    res.sendFile('sw.js', {root: __dirname});
+});
+
 app.get('/api/health', (req, res) => {
     res.json({
         status: 'ok',

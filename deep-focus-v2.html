@@ -1725,12 +1725,26 @@
                 if (!('serviceWorker' in navigator)) return;
                 try {
                     swReg = await navigator.serviceWorker.register('/sw.js');
-                    // Listen for TIMER_ENDED messages from the SW (fired when tab was hidden)
+                    // Wait for SW to become active if it isn't yet
+                    if (!navigator.serviceWorker.controller) {
+                        await new Promise((resolve) => {
+                            navigator.serviceWorker.addEventListener(
+                                'controllerchange',
+                                resolve,
+                                {once: true},
+                            );
+                        });
+                    }
+                    // Listen for TIMER_ENDED from SW (tab was hidden when timer ended)
                     navigator.serviceWorker.addEventListener('message', (e) => {
                         if (e.data?.type === 'TIMER_ENDED') {
-                            // Tab was hidden when timer ended — SW already showed notification
-                            // Now play sound + update UI since tab may now be visible
-                            if (!running) onEnd();
+                            // SW fired — stop the interval so timerTick doesn't also call onEnd()
+                            clearInterval(timerInt);
+                            running = false;
+                            remaining = 0;
+                            setClockState('idle');
+                            renderClock();
+                            resumeCtx().then(() => onEnd());
                         }
                     });
                 } catch (err) {
@@ -1746,8 +1760,10 @@
             }
 
             function swSend(msg) {
-                if (!swReg?.active) return;
-                swReg.active.postMessage(msg);
+                // Use controller if available, otherwise fall back to swReg.active
+                const sw = navigator.serviceWorker?.controller || swReg?.active;
+                if (!sw) return;
+                sw.postMessage(msg);
             }
 
             function toggleTimer() {

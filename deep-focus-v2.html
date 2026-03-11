@@ -1666,10 +1666,12 @@
 
             // ── TIMER ──
             const cfg = {focus: 50, break: 10, cycle: 8};
+            const TEST_MODE = true; // ← change to false for production
+            const MULT = TEST_MODE ? 1 : 60;
             const CIRC = 276.46;
             let mode = 'focus',
-                remaining = cfg.focus * 60,
-                totalSec = cfg.focus * 60;
+                remaining = cfg.focus * MULT,
+                totalSec = cfg.focus * MULT;
             let running = false,
                 timerInt = null,
                 pomCount = 0;
@@ -1677,7 +1679,7 @@
             function switchMode(m) {
                 if (running) return;
                 mode = m;
-                totalSec = cfg[mode] * 60;
+                totalSec = cfg[mode] * MULT;
                 remaining = totalSec;
                 updateAdjLabel();
                 renderClock();
@@ -1686,18 +1688,19 @@
             function adjustTime(delta) {
                 if (running) return;
                 const key = mode;
-                const min = key === 'focus' ? 10 : 5;
-                const max = key === 'focus' ? 120 : 60;
+                const min = TEST_MODE ? 10 : key === 'focus' ? 10 : 5;
+                const max = TEST_MODE ? 300 : key === 'focus' ? 120 : 60;
                 cfg[key] = Math.max(min, Math.min(max, cfg[key] + delta));
-                totalSec = cfg[key] * 60;
+                totalSec = cfg[key] * MULT;
                 remaining = totalSec;
                 updateAdjLabel();
                 renderClock();
             }
 
             function updateAdjLabel() {
+                const unit = TEST_MODE ? 'sec' : 'min';
                 document.getElementById('adjLabel').textContent =
-                    `${cfg[mode]} min`;
+                    `${cfg[mode]} ${unit}`;
             }
 
             function setClockState(state) {
@@ -1718,53 +1721,7 @@
                 );
             }
 
-            // ── SERVICE WORKER + NOTIFICATIONS ──
-            let swReg = null;
-
-            async function initSW() {
-                if (!('serviceWorker' in navigator)) return;
-                try {
-                    swReg = await navigator.serviceWorker.register('/sw.js');
-                    // Wait for SW to become active if it isn't yet
-                    if (!navigator.serviceWorker.controller) {
-                        await new Promise((resolve) => {
-                            navigator.serviceWorker.addEventListener(
-                                'controllerchange',
-                                resolve,
-                                {once: true},
-                            );
-                        });
-                    }
-                    // Listen for TIMER_ENDED from SW (tab was hidden when timer ended)
-                    navigator.serviceWorker.addEventListener('message', (e) => {
-                        if (e.data?.type === 'TIMER_ENDED') {
-                            // SW fired — stop the interval so timerTick doesn't also call onEnd()
-                            clearInterval(timerInt);
-                            running = false;
-                            remaining = 0;
-                            setClockState('idle');
-                            renderClock();
-                            resumeCtx().then(() => onEnd());
-                        }
-                    });
-                } catch (err) {
-                    console.warn('SW registration failed:', err);
-                }
-            }
-
-            async function requestNotifPermission() {
-                if (!('Notification' in window)) return;
-                if (Notification.permission === 'default') {
-                    await Notification.requestPermission();
-                }
-            }
-
-            function swSend(msg) {
-                // Use controller if available, otherwise fall back to swReg.active
-                const sw = navigator.serviceWorker?.controller || swReg?.active;
-                if (!sw) return;
-                sw.postMessage(msg);
-            }
+            let timerEndAt = 0;
 
             function toggleTimer() {
                 stopAlarm();
@@ -1773,22 +1730,14 @@
                     clearInterval(timerInt);
                     running = false;
                     setClockState('idle');
-                    swSend({type: 'CANCEL_TIMER'});
                 } else {
-                    if (ctx.state === 'suspended') ctx.resume();
+                    resumeCtx();
                     running = true;
                     setClockState('running');
                     timerEndAt = Date.now() + remaining * 1000;
-                    // Tell SW when to fire notification (in case tab goes inactive)
-                    swSend({
-                        type: 'START_TIMER',
-                        payload: {remainingMs: remaining * 1000, mode},
-                    });
                     timerInt = setInterval(timerTick, 500);
                 }
             }
-
-            let timerEndAt = 0;
 
             function timerTick() {
                 if (!running) return;
@@ -1797,7 +1746,6 @@
                     remaining = 0;
                     clearInterval(timerInt);
                     running = false;
-                    swSend({type: 'CANCEL_TIMER'});
                     setClockState('idle');
                     renderClock();
                     onEnd();
@@ -1806,14 +1754,12 @@
                 renderClock();
             }
 
-            // Sync ring instantly when tab becomes visible again
             document.addEventListener('visibilitychange', () => {
                 if (!document.hidden && running) timerTick();
             });
 
             function updateHint() {}
 
-            // tap = start/pause, double-tap = reset
             let tapTimer = null;
             document
                 .getElementById('clockRing')
@@ -1841,26 +1787,34 @@
                 );
             }
 
+            function startBreak() {
+                mode = 'break';
+                totalSec = cfg.break * MULT;
+                remaining = totalSec;
+                updateAdjLabel();
+                renderClock();
+                running = true;
+                setClockState('running');
+                timerEndAt = Date.now() + remaining * 1000;
+                timerInt = setInterval(timerTick, 500);
+            }
+
             function onEnd() {
                 if (mode === 'focus') {
-                    playDing();
+                    // Focus done → soft ding → auto-start break
+                    resumeCtx().then(() => playDing());
                     pomCount++;
                     renderDots();
-                    showToast('Session complete — 10 min break started.');
-                    setTimeout(() => {
-                        mode = 'break';
-                        totalSec = cfg.break * 60;
-                        remaining = totalSec;
-                        updateAdjLabel();
-                        setClockState('idle');
-                        renderClock();
-                    }, 900);
+                    savePomCount();
+                    showToast('Session complete — break started.');
+                    setTimeout(() => startBreak(), 900);
                 } else {
-                    playAlarm();
+                    // Break done → 3s siren → reset to focus, wait for tap
+                    resumeCtx().then(() => playAlarm());
                     showToast('Break over — tap to start your next session.');
                     setTimeout(() => {
                         mode = 'focus';
-                        totalSec = cfg.focus * 60;
+                        totalSec = cfg.focus * MULT;
                         remaining = totalSec;
                         updateAdjLabel();
                         setClockState('idle');
@@ -1873,7 +1827,7 @@
                 clearInterval(timerInt);
                 running = false;
                 timerEndAt = 0;
-                remaining = cfg[mode] * 60;
+                remaining = cfg[mode] * MULT;
                 totalSec = remaining;
                 pulseClock();
                 setClockState('idle');
@@ -1953,7 +1907,7 @@
                 nnItems = nnItems.map((i) => ({...i, done: false}));
                 nnStreak = 0;
                 mode = 'focus';
-                totalSec = cfg.focus * 60;
+                totalSec = cfg.focus * MULT;
                 remaining = totalSec;
                 updateAdjLabel();
                 setClockState('idle');
@@ -2116,9 +2070,6 @@
                 renderNN();
                 updateAdjLabel();
                 setClockState('idle');
-                await initSW();
-                await requestNotifPermission();
-
                 // Load session (pomCount + theme)
                 const session = await api('GET', `/session/${deviceId}`);
                 if (session) {
